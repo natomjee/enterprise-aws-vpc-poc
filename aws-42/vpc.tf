@@ -8,7 +8,7 @@ resource "aws_vpc" "vpc" {
   enable_dns_hostnames = true
 
   tags = {
-    Name = "simple-vpc"
+    Name = "42-simple-vpc"
   }
 }
 
@@ -16,14 +16,14 @@ resource "aws_internet_gateway" "internet-gateway" {
   vpc_id = aws_vpc.vpc.id
 
   tags = {
-    Name = "Simple IGW"
+    Name = "42-simple IGW"
   }
 }
 
 resource "aws_eip" "nat_eip" {
   depends_on = [aws_internet_gateway.internet-gateway]
   tags = {
-    Name = "Simple EIP"
+    Name = "42-simple EIP"
   }
 }
 
@@ -33,7 +33,7 @@ resource "aws_nat_gateway" "nat" {
   subnet_id     = aws_subnet.bootcamp-public-subnet[0].id
 
   tags = {
-    Name        = "Simple NAT"
+    Name        = "42-Simple NAT"
   }
 }
 
@@ -46,7 +46,7 @@ resource "aws_subnet" "bootcamp-public-subnet" {
   map_public_ip_on_launch = true
 
   tags = {
-    Name = "Simple Public Subnet ${count.index}"
+    Name = "42-simple Public Subnet ${count.index}"
   }
 }
 
@@ -54,7 +54,7 @@ resource "aws_route_table" "public-route-table" {
   vpc_id = aws_vpc.vpc.id
 
   tags = {
-    Name = "Simple Public Route Table"
+    Name = "42-simple Public Route Table"
   }
 }
 
@@ -63,7 +63,7 @@ resource "aws_route_table" "private-route-table" {
   vpc_id = aws_vpc.vpc.id
 
   tags = {
-    Name = "Simple Private Route Table"
+    Name = "42-simple Private Route Table"
   }
 }
 
@@ -94,7 +94,7 @@ resource "aws_subnet" "bootcamp-private-subnet" {
   map_public_ip_on_launch = false
 
   tags = {
-    Name = "Simple Private Subnet ${count.index}"
+    Name = "42-simple Private Subnet ${count.index}"
   }
 }
 
@@ -105,7 +105,7 @@ resource "aws_route_table_association" "private-subnet-route-table-association" 
 }
 
 resource "aws_security_group" "all-bootcamp" {
-  name = "all-bootcamp-sg"
+  name = "42-all-bootcamp-sg"
   description = "Allows free traffic between all instances within the bootcamp VPC"
   vpc_id = aws_vpc.vpc.id
 
@@ -125,14 +125,14 @@ resource "aws_security_group" "all-bootcamp" {
   }
 
   tags = {
-    Name = "Bootcamp Internal Access"
+    Name = "42-Bootcamp Internal Access"
     owner_email = var.owner_email
     owner_name = var.owner_name
   }
 }
 
 resource "aws_security_group" "external-access" {
-  name = "external-access-sg"
+  name = "42-external-access-sg"
   description = "Allows free traffic from a specific IP"
   vpc_id = aws_vpc.vpc.id
 
@@ -152,7 +152,7 @@ resource "aws_security_group" "external-access" {
   }
 
   tags = {
-    Name = "Bootcamp External Access"
+    Name = "42-Bootcamp External Access"
     owner_email = var.owner_email
     owner_name = var.owner_name
   }

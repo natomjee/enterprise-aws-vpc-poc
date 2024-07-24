@@ -8,11 +8,6 @@ output "jumphost-ip" {
   value = aws_instance.jumphost.public_ip
 }
 
-output "database-private-ip" {
-  description = "The database IP. This is the private IP address, only accessible from the jumphost"
-  value = aws_instance.database.private_ip
-}
-
 output "vpc-id" {
   description = "The IP of the bootcamp VPC"
   value = aws_vpc.vpc.id
