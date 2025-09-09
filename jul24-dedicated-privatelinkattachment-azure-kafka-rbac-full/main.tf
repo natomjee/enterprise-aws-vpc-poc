@@ -1,9 +1,9 @@
 terraform {
   required_version = ">= 0.14.0"
   required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = ">= 5.17.0"
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = ">= 3.0"
     }
     confluent = {
       source  = "confluentinc/confluent"
@@ -17,58 +17,61 @@ provider "confluent" {
   cloud_api_secret = var.confluent_cloud_api_secret
 }
 
-provider "aws" {
-  region = var.region
+provider "azurerm" {
+  features {}
+  subscription_id = var.azure_subscription_id
 }
-
 
 resource "confluent_environment" "staging" {
   display_name = "Staging"
 }
 
-resource "confluent_kafka_cluster" "enterprise" {
+resource "confluent_kafka_cluster" "dedicated" {
   display_name = "inventory"
   availability = "MULTI_ZONE"
-  cloud        = "AWS"
+  cloud        = "AZURE"
   region       = var.region
-  enterprise {}
+  dedicated {
+    cku = var.cku
+  }
   environment {
     id = confluent_environment.staging.id
   }
 }
 
 resource "confluent_private_link_attachment" "pla" {
-  cloud = "AWS"
+  cloud = "AZURE"
   region = var.region
-  display_name = "staging-aws-platt"
+  display_name = "staging-azure-platt"
   environment {
     id = confluent_environment.staging.id
   }
 }
 
 module "privatelink" {
-  source                   = "./aws-privatelink-endpoint"
-  vpc_id                   = var.vpc_id
-  privatelink_service_name = confluent_private_link_attachment.pla.aws[0].vpc_endpoint_service_name
-  bootstrap                = confluent_kafka_cluster.enterprise.bootstrap_endpoint
-  subnets_to_privatelink   = var.subnets_to_privatelink
-  dns_domain_name = confluent_private_link_attachment.pla.dns_domain
+  source                        = "./azure-privatelink-endpoint"
+  resource_group_name          = var.resource_group_name
+  virtual_network_name         = var.virtual_network_name
+  subnet_name                  = var.subnet_name
+  privatelink_service_name     = confluent_private_link_attachment.pla.azure[0].private_link_service_alias
+  bootstrap                    = confluent_kafka_cluster.dedicated.bootstrap_endpoint
+  dns_domain_name              = confluent_private_link_attachment.pla.dns_domain
+  location                     = var.location
 }
 
 resource "confluent_private_link_attachment_connection" "plac" {
-  display_name = "staging-aws-plattc"
+  display_name = "staging-azure-plattc"
   environment {
     id = confluent_environment.staging.id
   }
-  aws {
-    vpc_endpoint_id = module.privatelink.vpc_endpoint_id
+  azure {
+    private_endpoint_resource_id = module.privatelink.private_endpoint_id
   }
 
   private_link_attachment {
     id = confluent_private_link_attachment.pla.id
   }
 }
-
 
 // 'app-manager' service account is required in this configuration to create 'orders' topic and assign roles
 // to 'app-producer' and 'app-consumer' service accounts.
@@ -80,7 +83,7 @@ resource "confluent_service_account" "app-manager" {
 resource "confluent_role_binding" "app-manager-kafka-cluster-admin" {
   principal   = "User:${confluent_service_account.app-manager.id}"
   role_name   = "CloudClusterAdmin"
-  crn_pattern = confluent_kafka_cluster.enterprise.rbac_crn
+  crn_pattern = confluent_kafka_cluster.dedicated.rbac_crn
 }
 
 resource "confluent_api_key" "app-manager-kafka-api-key" {
@@ -98,9 +101,9 @@ resource "confluent_api_key" "app-manager-kafka-api-key" {
   }
 
   managed_resource {
-    id          = confluent_kafka_cluster.enterprise.id
-    api_version = confluent_kafka_cluster.enterprise.api_version
-    kind        = confluent_kafka_cluster.enterprise.kind
+    id          = confluent_kafka_cluster.dedicated.id
+    api_version = confluent_kafka_cluster.dedicated.api_version
+    kind        = confluent_kafka_cluster.dedicated.kind
 
     environment {
       id = confluent_environment.staging.id
@@ -111,7 +114,7 @@ resource "confluent_api_key" "app-manager-kafka-api-key" {
   # 1. confluent_role_binding.app-manager-kafka-cluster-admin is created before
   # confluent_api_key.app-manager-kafka-api-key is used to create instances of
   # confluent_kafka_topic resource.
-  # 2. Kafka connectivity through AWS PrivateLink is setup.
+  # 2. Kafka connectivity through Azure Private Link is setup.
   depends_on = [
     confluent_role_binding.app-manager-kafka-cluster-admin,
     confluent_private_link_attachment_connection.plac
@@ -137,16 +140,16 @@ resource "confluent_api_key" "app-consumer-kafka-api-key" {
   }
 
   managed_resource {
-    id          = confluent_kafka_cluster.enterprise.id
-    api_version = confluent_kafka_cluster.enterprise.api_version
-    kind        = confluent_kafka_cluster.enterprise.kind
+    id          = confluent_kafka_cluster.dedicated.id
+    api_version = confluent_kafka_cluster.dedicated.api_version
+    kind        = confluent_kafka_cluster.dedicated.kind
 
     environment {
       id = confluent_environment.staging.id
     }
   }
 
-  # The goal is to ensure that Kafka connectivity through AWS PrivateLink is setup.
+  # The goal is to ensure that Kafka connectivity through Azure Private Link is setup.
   depends_on = [
     confluent_private_link_attachment_connection.plac
   ]
@@ -154,10 +157,10 @@ resource "confluent_api_key" "app-consumer-kafka-api-key" {
 
 resource "confluent_kafka_topic" "orders" {
   kafka_cluster {
-    id = confluent_kafka_cluster.enterprise.id
+    id = confluent_kafka_cluster.dedicated.id
   }
   topic_name    = "jee-orders"
-  rest_endpoint = confluent_kafka_cluster.enterprise.rest_endpoint
+  rest_endpoint = confluent_kafka_cluster.dedicated.rest_endpoint
   credentials {
     key    = confluent_api_key.app-manager-kafka-api-key.id
     secret = confluent_api_key.app-manager-kafka-api-key.secret
@@ -171,7 +174,7 @@ resource "confluent_kafka_topic" "orders" {
 resource "confluent_role_binding" "app-producer-developer-write" {
   principal   = "User:${confluent_service_account.app-producer.id}"
   role_name   = "DeveloperWrite"
-  crn_pattern = "${confluent_kafka_cluster.enterprise.rbac_crn}/kafka=${confluent_kafka_cluster.enterprise.id}/topic=${confluent_kafka_topic.orders.topic_name}"
+  crn_pattern = "${confluent_kafka_cluster.dedicated.rbac_crn}/kafka=${confluent_kafka_cluster.dedicated.id}/topic=${confluent_kafka_topic.orders.topic_name}"
 }
 
 resource "confluent_service_account" "app-producer" {
@@ -193,16 +196,16 @@ resource "confluent_api_key" "app-producer-kafka-api-key" {
   }
 
   managed_resource {
-    id          = confluent_kafka_cluster.enterprise.id
-    api_version = confluent_kafka_cluster.enterprise.api_version
-    kind        = confluent_kafka_cluster.enterprise.kind
+    id          = confluent_kafka_cluster.dedicated.id
+    api_version = confluent_kafka_cluster.dedicated.api_version
+    kind        = confluent_kafka_cluster.dedicated.kind
 
     environment {
       id = confluent_environment.staging.id
     }
   }
 
-  # The goal is to ensure that Kafka connectivity through AWS PrivateLink is setup.
+  # The goal is to ensure that Kafka connectivity through Azure Private Link is setup.
   depends_on = [
     confluent_private_link_attachment_connection.plac
   ]
@@ -213,7 +216,7 @@ resource "confluent_api_key" "app-producer-kafka-api-key" {
 resource "confluent_role_binding" "app-consumer-developer-read-from-topic" {
   principal   = "User:${confluent_service_account.app-consumer.id}"
   role_name   = "DeveloperRead"
-  crn_pattern = "${confluent_kafka_cluster.enterprise.rbac_crn}/kafka=${confluent_kafka_cluster.enterprise.id}/topic=${confluent_kafka_topic.orders.topic_name}"
+  crn_pattern = "${confluent_kafka_cluster.dedicated.rbac_crn}/kafka=${confluent_kafka_cluster.dedicated.id}/topic=${confluent_kafka_topic.orders.topic_name}"
 }
 
 resource "confluent_role_binding" "app-consumer-developer-read-from-group" {
@@ -222,5 +225,5 @@ resource "confluent_role_binding" "app-consumer-developer-read-from-group" {
   // The existing value of crn_pattern's suffix (group=confluent_cli_consumer_*) are set up to match Confluent CLI's default consumer group ID ("confluent_cli_consumer_<uuid>").
   // https://docs.confluent.io/confluent-cli/current/command-reference/kafka/topic/confluent_kafka_topic_consume.html
   // Update it to match your target consumer group ID.
-  crn_pattern = "${confluent_kafka_cluster.enterprise.rbac_crn}/kafka=${confluent_kafka_cluster.enterprise.id}/group=confluent_cli_consumer_*"
+  crn_pattern = "${confluent_kafka_cluster.dedicated.rbac_crn}/kafka=${confluent_kafka_cluster.dedicated.id}/group=confluent_cli_consumer_*"
 }
