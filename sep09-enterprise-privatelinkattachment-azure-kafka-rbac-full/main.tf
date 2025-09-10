@@ -13,10 +13,6 @@ provider "confluent" {
   cloud_api_secret = var.confluent_cloud_api_secret
 }
 
-resource "confluent_environment" "staging" {
-  display_name = "Staging"
-}
-
 resource "confluent_kafka_cluster" "enterprise" {
   display_name = "gruppy"
   availability = "MULTI_ZONE"
@@ -24,7 +20,7 @@ resource "confluent_kafka_cluster" "enterprise" {
   region       = var.region
   enterprise {}
   environment {
-    id = confluent_environment.staging.id
+    id = var.confluent_environment_id
   }
 }
 
@@ -44,10 +40,10 @@ resource "confluent_role_binding" "app-manager-kafka-cluster-admin" {
 resource "confluent_api_key" "app-manager-kafka-api-key" {
   display_name = "sep09-app-manager-kafka-api-key"
   description  = "Kafka API Key that is owned by 'sep09-app-manager' service account"
-  disable_wait_for_ready = true
+  disable_wait_for_ready = false
 
-  # Set optional `disable_wait_for_ready` attribute (defaults to `false`) to `true` if the machine where Terraform is not run within a private network
-  # disable_wait_for_ready = true
+  # Set `disable_wait_for_ready` to `false` (default) when running from within private network with connectivity to Kafka REST API
+  # This allows Terraform to validate API key creation by listing topics
 
   owner {
     id          = confluent_service_account.app-manager.id
@@ -61,7 +57,7 @@ resource "confluent_api_key" "app-manager-kafka-api-key" {
     kind        = confluent_kafka_cluster.enterprise.kind
 
     environment {
-      id = confluent_environment.staging.id
+      id = var.confluent_environment_id
     }
   }
 
@@ -81,9 +77,10 @@ resource "confluent_service_account" "app-consumer" {
 resource "confluent_api_key" "app-consumer-kafka-api-key" {
   display_name = "sep09-app-consumer-kafka-api-key"
   description  = "Kafka API Key that is owned by 'sep09-app-consumer' service account"
+  disable_wait_for_ready = false
 
-  # Set optional `disable_wait_for_ready` attribute (defaults to `false`) to `true` if the machine where Terraform is not run within a private network
-  # disable_wait_for_ready = true
+  # Set `disable_wait_for_ready` to `false` (default) when running from within private network with connectivity to Kafka REST API
+  # This allows Terraform to validate API key creation by listing topics
 
   owner {
     id          = confluent_service_account.app-consumer.id
@@ -97,30 +94,9 @@ resource "confluent_api_key" "app-consumer-kafka-api-key" {
     kind        = confluent_kafka_cluster.enterprise.kind
 
     environment {
-      id = confluent_environment.staging.id
+      id = var.confluent_environment_id
     }
   }
-}
-
-resource "confluent_kafka_topic" "orders" {
-  kafka_cluster {
-    id = confluent_kafka_cluster.enterprise.id
-  }
-  topic_name    = "jee-orders"
-  rest_endpoint = confluent_kafka_cluster.enterprise.rest_endpoint
-  credentials {
-    key    = confluent_api_key.app-manager-kafka-api-key.id
-    secret = confluent_api_key.app-manager-kafka-api-key.secret
-  }
-  depends_on = [
-    confluent_api_key.app-manager-kafka-api-key
-  ]
-}
-
-resource "confluent_role_binding" "app-producer-developer-write" {
-  principal   = "User:${confluent_service_account.app-producer.id}"
-  role_name   = "DeveloperWrite"
-  crn_pattern = "${confluent_kafka_cluster.enterprise.rbac_crn}/kafka=${confluent_kafka_cluster.enterprise.id}/topic=${confluent_kafka_topic.orders.topic_name}"
 }
 
 resource "confluent_service_account" "app-producer" {
@@ -129,9 +105,10 @@ resource "confluent_service_account" "app-producer" {
 }
 
 resource "confluent_api_key" "app-producer-kafka-api-key" {
+  disable_wait_for_ready = false
 
-  # Set optional `disable_wait_for_ready` attribute (defaults to `false`) to `true` if the machine where Terraform is not run within a private network
-  # disable_wait_for_ready = true
+  # Set `disable_wait_for_ready` to `false` (default) when running from within private network with connectivity to Kafka REST API
+  # This allows Terraform to validate API key creation by listing topics
 
   display_name = "sep09-app-producer-kafka-api-key"
   description  = "Kafka API Key that is owned by 'sep09-app-producer' service account"
@@ -147,24 +124,7 @@ resource "confluent_api_key" "app-producer-kafka-api-key" {
     kind        = confluent_kafka_cluster.enterprise.kind
 
     environment {
-      id = confluent_environment.staging.id
+      id = var.confluent_environment_id
     }
   }
-}
-
-// Note that in order to consume from a topic, the principal of the consumer ('app-consumer' service account)
-// needs to be authorized to perform 'READ' operation on both Topic and Group resources:
-resource "confluent_role_binding" "app-consumer-developer-read-from-topic" {
-  principal   = "User:${confluent_service_account.app-consumer.id}"
-  role_name   = "DeveloperRead"
-  crn_pattern = "${confluent_kafka_cluster.enterprise.rbac_crn}/kafka=${confluent_kafka_cluster.enterprise.id}/topic=${confluent_kafka_topic.orders.topic_name}"
-}
-
-resource "confluent_role_binding" "app-consumer-developer-read-from-group" {
-  principal = "User:${confluent_service_account.app-consumer.id}"
-  role_name = "DeveloperRead"
-  // The existing value of crn_pattern's suffix (group=confluent_cli_consumer_*) are set up to match Confluent CLI's default consumer group ID ("confluent_cli_consumer_<uuid>").
-  // https://docs.confluent.io/confluent-cli/current/command-reference/kafka/topic/confluent_kafka_topic_consume.html
-  // Update it to match your target consumer group ID.
-  crn_pattern = "${confluent_kafka_cluster.enterprise.rbac_crn}/kafka=${confluent_kafka_cluster.enterprise.id}/group=confluent_cli_consumer_*"
 }

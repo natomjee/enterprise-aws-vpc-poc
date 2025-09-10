@@ -39,6 +39,17 @@ resource "confluent_kafka_cluster" "dedicated" {
   }
 }
 
+resource "confluent_kafka_cluster" "enterprise" {
+  display_name = "enterprise-cluster"
+  availability = "MULTI_ZONE"
+  cloud        = "AZURE"
+  region       = var.region
+  enterprise {}
+  environment {
+    id = confluent_environment.staging.id
+  }
+}
+
 resource "confluent_private_link_attachment" "pla" {
   cloud = "AZURE"
   region = var.region
@@ -73,6 +84,146 @@ resource "confluent_private_link_attachment_connection" "plac" {
   }
 }
 
+// Enterprise cluster service accounts
+resource "confluent_service_account" "enterprise-app-manager" {
+  display_name = "enterprise-app-manager"
+  description  = "Service account to manage enterprise Kafka cluster"
+}
+
+resource "confluent_service_account" "enterprise-app-producer" {
+  display_name = "enterprise-app-producer"
+  description  = "Service account to produce to enterprise Kafka cluster"
+}
+
+resource "confluent_service_account" "enterprise-app-consumer" {
+  display_name = "enterprise-app-consumer"
+  description  = "Service account to consume from enterprise Kafka cluster"
+}
+
+// Enterprise cluster role bindings
+resource "confluent_role_binding" "enterprise-app-manager-kafka-cluster-admin" {
+  principal   = "User:${confluent_service_account.enterprise-app-manager.id}"
+  role_name   = "CloudClusterAdmin"
+  crn_pattern = confluent_kafka_cluster.enterprise.rbac_crn
+}
+
+// Enterprise cluster API keys
+resource "confluent_api_key" "enterprise-app-manager-kafka-api-key" {
+  display_name = "enterprise-app-manager-kafka-api-key"
+  description  = "Kafka API Key that is owned by 'enterprise-app-manager' service account"
+  disable_wait_for_ready = true
+
+  owner {
+    id          = confluent_service_account.enterprise-app-manager.id
+    api_version = confluent_service_account.enterprise-app-manager.api_version
+    kind        = confluent_service_account.enterprise-app-manager.kind
+  }
+
+  managed_resource {
+    id          = confluent_kafka_cluster.enterprise.id
+    api_version = confluent_kafka_cluster.enterprise.api_version
+    kind        = confluent_kafka_cluster.enterprise.kind
+
+    environment {
+      id = confluent_environment.staging.id
+    }
+  }
+
+  depends_on = [
+    confluent_role_binding.enterprise-app-manager-kafka-cluster-admin,
+    confluent_private_link_attachment_connection.plac
+  ]
+}
+
+resource "confluent_api_key" "enterprise-app-producer-kafka-api-key" {
+  display_name = "enterprise-app-producer-kafka-api-key"
+  description  = "Kafka API Key that is owned by 'enterprise-app-producer' service account"
+  disable_wait_for_ready = true
+
+  owner {
+    id          = confluent_service_account.enterprise-app-producer.id
+    api_version = confluent_service_account.enterprise-app-producer.api_version
+    kind        = confluent_service_account.enterprise-app-producer.kind
+  }
+
+  managed_resource {
+    id          = confluent_kafka_cluster.enterprise.id
+    api_version = confluent_kafka_cluster.enterprise.api_version
+    kind        = confluent_kafka_cluster.enterprise.kind
+
+    environment {
+      id = confluent_environment.staging.id
+    }
+  }
+
+  depends_on = [
+    confluent_private_link_attachment_connection.plac
+  ]
+}
+
+resource "confluent_api_key" "enterprise-app-consumer-kafka-api-key" {
+  display_name = "enterprise-app-consumer-kafka-api-key"
+  description  = "Kafka API Key that is owned by 'enterprise-app-consumer' service account"
+  disable_wait_for_ready = true
+
+  owner {
+    id          = confluent_service_account.enterprise-app-consumer.id
+    api_version = confluent_service_account.enterprise-app-consumer.api_version
+    kind        = confluent_service_account.enterprise-app-consumer.kind
+  }
+
+  managed_resource {
+    id          = confluent_kafka_cluster.enterprise.id
+    api_version = confluent_kafka_cluster.enterprise.api_version
+    kind        = confluent_kafka_cluster.enterprise.kind
+
+    environment {
+      id = confluent_environment.staging.id
+    }
+  }
+
+  depends_on = [
+    confluent_private_link_attachment_connection.plac
+  ]
+}
+
+// Enterprise cluster topic
+resource "confluent_kafka_topic" "enterprise-orders" {
+  kafka_cluster {
+    id = confluent_kafka_cluster.enterprise.id
+  }
+  topic_name    = "enterprise-orders"
+  rest_endpoint = confluent_kafka_cluster.enterprise.rest_endpoint
+  credentials {
+    key    = confluent_api_key.enterprise-app-manager-kafka-api-key.id
+    secret = confluent_api_key.enterprise-app-manager-kafka-api-key.secret
+  }
+  depends_on = [
+    confluent_api_key.enterprise-app-manager-kafka-api-key,
+    confluent_private_link_attachment_connection.plac
+  ]
+}
+
+// Enterprise cluster topic-level role bindings
+resource "confluent_role_binding" "enterprise-app-producer-developer-write" {
+  principal   = "User:${confluent_service_account.enterprise-app-producer.id}"
+  role_name   = "DeveloperWrite"
+  crn_pattern = "${confluent_kafka_cluster.enterprise.rbac_crn}/kafka=${confluent_kafka_cluster.enterprise.id}/topic=${confluent_kafka_topic.enterprise-orders.topic_name}"
+}
+
+resource "confluent_role_binding" "enterprise-app-consumer-developer-read-from-topic" {
+  principal   = "User:${confluent_service_account.enterprise-app-consumer.id}"
+  role_name   = "DeveloperRead"
+  crn_pattern = "${confluent_kafka_cluster.enterprise.rbac_crn}/kafka=${confluent_kafka_cluster.enterprise.id}/topic=${confluent_kafka_topic.enterprise-orders.topic_name}"
+}
+
+resource "confluent_role_binding" "enterprise-app-consumer-developer-read-from-group" {
+  principal = "User:${confluent_service_account.enterprise-app-consumer.id}"
+  role_name = "DeveloperRead"
+  crn_pattern = "${confluent_kafka_cluster.enterprise.rbac_crn}/kafka=${confluent_kafka_cluster.enterprise.id}/group=confluent_cli_consumer_*"
+}
+
+// Dedicated cluster service accounts (existing)
 // 'app-manager' service account is required in this configuration to create 'orders' topic and assign roles
 // to 'app-producer' and 'app-consumer' service accounts.
 resource "confluent_service_account" "app-manager" {
